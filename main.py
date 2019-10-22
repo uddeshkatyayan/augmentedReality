@@ -7,8 +7,9 @@ import os
 from objLoader import *
 
 #from utils.kp_tools import kp_list_2_opencv_kp_list
-
+N = 25
 MIN_MATCHES = 150
+
 def projection_matrix(camera_parameters, homography):
 
     homography = homography * (-1)
@@ -69,49 +70,87 @@ if __name__ == "__main__" :
             col = [float(i) for i in line.split()]
             intrinsic_params.append(col)
 
-    obj = OBJ(os.path.join('./', 'models/fox.obj'), swapyz=True)
+    obj = OBJ(os.path.join('./models/', 'fox.obj'), swapyz=True)
 
     capx = cv2.VideoCapture(-1)
 
     frames = []
     persistent_img = np.ndarray([])
 
+    orb = cv2.ORB_create()
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
     model_path = sys.argv[2]
     model_name = glob.glob(model_path+"/*")
-    model = cv2.imread(model_name[0],0)
-    print(model_name[0])
+    print(model_name)
+    assert len(model_name) > 1, "There must be at least 2 visual markers present in the directory."
+    models = [cv2.imread(m,0) for m in model_name[:2]]
+    model = models[0]
 
-    while(True):
+    print("identifying",model_name[0])
+    found = False
+    result = []
 
+    while not found:
         ret, frame = capx.read()
+        #cv2.imshow('input',frame)
+        #if cv2.waitKey(1) & 0xFF == ord('a'):
+            #break
 
-        if cv2.waitKey(1) & 0xFF == ord('a'):
-            break
         cap = frame
-
-        orb = cv2.ORB_create()
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-        kp_model, des_model = orb.detectAndCompute(model, None)
         kp_frame, des_frame = orb.detectAndCompute(cap, None)
-        matches = bf.match(des_model, des_frame)
-        print(len(matches))
 
-        if len(matches) < MIN_MATCHES:
-            cv2.imshow('output',persistent_img)
-            continue
+        for idx,model in enumerate(models[1:]):
+            kp_model, des_model = orb.detectAndCompute(model, None)
+            matches = bf.match(des_model, des_frame)
+            print(idx, len(matches))
+            if len(matches) < MIN_MATCHES:
+            	found = False
+            	break
+            result = frame
+            found = True
 
-        src_pts = np.float32([kp_model[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp_frame[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    wall = models[0]
+    base = models[1]
+    kp_frame, des_frame = orb.detectAndCompute(cap, None)
+    kp_base, des_base = orb.detectAndCompute(base, None)
+    kp_wall, des_wall = orb.detectAndCompute(wall, None)
+    matches_wall = bf.match(des_wall, des_frame)
+    matches_base = bf.match(des_base, des_frame)
+    frame_pts_wall = np.float32([kp_frame[m.trainIdx].pt for m in matches_wall]).reshape(-1, 1, 2)
+    frame_pts_base = np.float32([kp_frame[m.trainIdx].pt for m in matches_base]).reshape(-1, 1, 2)
+    wall_pts = np.float32([kp_wall[m.queryIdx].pt for m in matches_wall]).reshape(-1, 1, 2)
+    base_pts = np.float32([kp_base[m.queryIdx].pt for m in matches_base]).reshape(-1, 1, 2)
+    M_wall, mask = cv2.findHomography(wall_pts, frame_pts_wall, cv2.RANSAC, 5.0)
+    M_base, mask = cv2.findHomography(base_pts, frame_pts_base, cv2.RANSAC, 5.0)
 
-        h, w = model.shape
-        pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
+    h, w = wall.shape
+    pts_wall = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
+    dst_wall = cv2.perspectiveTransform(pts_wall, M_wall)
+    print(dst_wall.shape)
+    proj_mat_wall = projection_matrix(intrinsic_params,M_wall)
 
-        dst = cv2.perspectiveTransform(pts, M)
-        proj_mat = projection_matrix(intrinsic_params,M)
+    h, w = base.shape
+    pts_base = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
+    dst_base = cv2.perspectiveTransform(pts_base, (M_base))
+    diff = (dst_wall-dst_base)
+    dx = [x[0][0] for x in diff]
+    dy = [x[0][1] for x in diff]
 
-        finalImg = render(cap, obj, proj_mat, model, False)
-        persistent_img = finalImg
-
+    for i in range(N):
+        t = [i*sum(dx)/4*N,i*sum(dy)/4*N]
+        Ht = np.array([[1,0,t[0]],[0,1,t[1]],[0,0,1]]) # translate
+        print(Ht)
+        dst_base = cv2.perspectiveTransform(pts_base, Ht.dot(M_base))
+        proj_mat_base = projection_matrix(intrinsic_params, Ht.dot(M_base))
+        finalImg = render(cap, obj, proj_mat_base, model, False)
         cv2.imshow('output',finalImg)
+        cv2.waitKey(100)
 
+
+    #finalImg = render(cap, obj, proj_mat_wall, model, False)
+    proj_mat_base = projection_matrix(intrinsic_params, (M_base))
+    finalImg = render(finalImg, obj, proj_mat_base, model, False)
+
+    cv2.imshow('output',finalImg)
+    cv2.waitKey(0)
