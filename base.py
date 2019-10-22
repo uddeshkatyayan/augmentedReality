@@ -80,41 +80,52 @@ if __name__ == "__main__" :
     persistent_img = np.ndarray([])
 
     model_path = sys.argv[2]
-    model_name = glob.glob(model_path+"/*")
-    model = cv2.imread(model_name[0],0)
-    print(model_name[0])
+    model_names = glob.glob(model_path+"/*")
+    #model = cv2.imread(model_name[0],0)
+    #print(model_name[0])
 
     while(True):
 
-        ret, frame = capx.read()
+	for model in model_names:
+		model = cv2.imread(model,0)
+        	ret, frame = capx.read()
 
-        if cv2.waitKey(1) & 0xFF == ord('a'):
-            break
-        cap = frame
+        	if cv2.waitKey(1) & 0xFF == ord('a'):
+            		break
+        	cap = frame
+		cv2.imshow('input',cap)
+        	orb = cv2.ORB_create()
+        	bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        	kp_model, des_model = orb.detectAndCompute(model, None)
+        	kp_frame, des_frame = orb.detectAndCompute(cap, None)
+        	matches = bf.match(des_model, des_frame)
+        	print(len(matches))
 
-        orb = cv2.ORB_create()
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-        kp_model, des_model = orb.detectAndCompute(model, None)
-        kp_frame, des_frame = orb.detectAndCompute(cap, None)
-        matches = bf.match(des_model, des_frame)
-        print(len(matches))
+        	if len(matches) < MIN_MATCHES:
+            		cv2.imshow('output',persistent_img)
+            		continue
 
-        if len(matches) < MIN_MATCHES:
-            cv2.imshow('output',persistent_img)
-            continue
+        	src_pts = np.float32([kp_model[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+        	dst_pts = np.float32([kp_frame[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+        	M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
 
-        src_pts = np.float32([kp_model[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp_frame[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-        M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+        	h, w = model.shape
+       	 	pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
 
-        h, w = model.shape
-        pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
+        	dst = cv2.perspectiveTransform(pts, M)
 
-        dst = cv2.perspectiveTransform(pts, M)
-        proj_mat = projection_matrix(intrinsic_params,M)
+		area = cv2.contourArea(dst)
+		
+		if(area < 100):
+		#	cv2.imshow('output',persistent_img)
+			continue
+		
+		cap = cv2.polylines(cap, [np.int32(dst)], True, 255, 3, cv2.LINE_AA) 
 
-        finalImg = render(cap, obj, proj_mat, model, False)
-        persistent_img = finalImg
+		proj_mat = projection_matrix(intrinsic_params,M)
 
-        cv2.imshow('output',finalImg)
+        	finalImg = render(cap, obj, proj_mat, model, False)
+        	persistent_img = finalImg
+
+        	cv2.imshow('output',finalImg)
 
